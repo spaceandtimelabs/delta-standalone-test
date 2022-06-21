@@ -1,3 +1,11 @@
+import io.delta.standalone.DeltaLog;
+import io.delta.standalone.Operation;
+import io.delta.standalone.OptimisticTransaction;
+import io.delta.standalone.actions.Action;
+import io.delta.standalone.actions.AddFile;
+import io.delta.standalone.actions.Format;
+import io.delta.standalone.actions.Metadata;
+import io.delta.standalone.types.*;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.conf.Configuration;
@@ -10,8 +18,8 @@ import org.joda.time.DateTimeZone;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.io.File;
+import java.util.*;
 
 
 public class App {
@@ -20,12 +28,36 @@ public class App {
 
         DateTime dateTime = new DateTime(2020, 6, 1, 0, 0, 0, 0, DateTimeZone.UTC);
 
+        List<AddFile> addNewFiles = new ArrayList<>();
+        String id = UUID.randomUUID().toString();
+        String name = "myMeta";
+        String desc = "The meta data so it doesn't error";
+        Format format = new Format("parquet", new HashMap<>());
+        List<String> partitionCols = new ArrayList<>();
+        Map<String, String> conf = new HashMap<>();
+        Optional<Long> created = Optional.of(System.currentTimeMillis());
+        StructType schema = new StructType(new StructField[]{
+            new StructField("myString", new StringType()),
+            new StructField("myInteger", new IntegerType()),
+            new StructField("myDateTime", new TimestampType()),
+        });
+
+        Metadata md = new Metadata(id, name, desc, format, partitionCols, conf, created, schema);
+
         for(int i = 0; i < 2; i++) {
-            generateParquetFileFor(dateTime.plusDays(i));
+            generateParquetFileFor(dateTime.plusDays(i), addNewFiles);
         }
+
+        DeltaLog log = DeltaLog.forTable(new Configuration(), "data/");
+        OptimisticTransaction txn = log.startTransaction();
+        List<Action> totalCommitFiles = new ArrayList<>();
+        totalCommitFiles.add(md);
+        totalCommitFiles.addAll(addNewFiles);
+
+        txn.commit(totalCommitFiles, new Operation(Operation.Name.UPDATE), "Zippy/1.0.0");
     }
 
-    private static void generateParquetFileFor(DateTime dateTime) {
+    private static void generateParquetFileFor(DateTime dateTime, List<AddFile> addNewFiles) {
         try {
             Schema schema = parseSchema();
             DateTimeFormatter fmt = DateTimeFormat.forPattern("yyyyMMdd");
@@ -47,6 +79,9 @@ public class App {
                     writer.write(record);
                 }
             }
+            File file = new File(path.toUri().getPath());
+            long len = file.length();
+            addNewFiles.add(new AddFile(file.getAbsolutePath(), new HashMap<>(), len, System.currentTimeMillis(), true, null, null));
         } catch (Exception ex) {
             ex.printStackTrace(System.out);
         }
